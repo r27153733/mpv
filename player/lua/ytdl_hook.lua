@@ -1,3 +1,7 @@
+--[[
+SOURCE_ https://github.com/mpv-player/mpv/blob/master/player/lua/ytdl_hook.lua
+COMMIT_ 20220226 b15b3f6
+]]--
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
 local options = require 'mp.options'
@@ -9,6 +13,7 @@ local o = {
     all_formats = false,
     force_all_formats = true,
     ytdl_path = "",
+    sub_format = "",
 }
 
 local ytdl = {
@@ -215,9 +220,7 @@ end
 local function parse_yt_playlist(url, json)
     -- return 0-based index to use with --playlist-start
 
-    if not json.extractor or
-       (json.extractor ~= "youtube:tab" and
-        json.extractor ~= "youtube:playlist") then
+    if not json.extractor or json.extractor ~= "youtube:playlist" then
         return nil
     end
 
@@ -242,7 +245,7 @@ local function parse_yt_playlist(url, json)
 
     -- if there's no index or it doesn't match, look for video
     for i = 1, #json.entries do
-        if json.entries[i].id == args["v"] then
+        if json.entries[i] == args["v"] then
             msg.debug("found requested video in index " .. (i - 1))
             return i - 1
         end
@@ -399,6 +402,10 @@ local function formats_to_edl(json, formats, use_all_formats)
             end
         end
     end
+    
+    if requested_formats then
+		set_http_headers(requested_formats[1].http_headers)
+    end
 
     local duration = as_integer(json["duration"])
     local single_url = nil
@@ -527,10 +534,6 @@ local function add_single_video(json)
     local max_bitrate = 0
     local requested_formats = json["requested_formats"]
     local all_formats = json["formats"]
-    local has_requested_formats = requested_formats and #requested_formats > 0
-    local http_headers = has_requested_formats
-                         and requested_formats[1].http_headers
-                         or json.http_headers
 
     if o.use_manifests and valid_manifest(json) then
         -- prefer manifest_url if present
@@ -560,6 +563,7 @@ local function add_single_video(json)
     if streamurl == ""  then
         -- possibly DASH/split tracks
         local res = nil
+        local has_requested_formats = requested_formats and #requested_formats > 0
 
         -- Not having requested_formats usually hints to HLS master playlist
         -- usage, which we don't want to split off, at least not yet.
@@ -596,14 +600,13 @@ local function add_single_video(json)
         end
         -- normal video or single track
         streamurl = edl_track or json.url
+        set_http_headers(json.http_headers)
     end
 
     if streamurl == "" then
         msg.error("No URL found in JSON data.")
         return
     end
-
-    set_http_headers(http_headers)
 
     msg.verbose("format selection: " .. format_info)
     msg.debug("streamurl: " .. streamurl)
@@ -737,14 +740,14 @@ function run_ytdl_hook(url)
     end
 
     local format = mp.get_property("options/ytdl-format")
+    local sub_format = o.sub_format
     local raw_options = mp.get_property_native("options/ytdl-raw-options")
     local allsubs = true
     local proxy = nil
     local use_playlist = false
 
     local command = {
-        ytdl.path, "--no-warnings", "-J", "--flat-playlist",
-        "--sub-format", "ass/srt/best"
+        ytdl.path, "--no-warnings", "-J", "--flat-playlist"
     }
 
     -- Checks if video option is "no", change format accordingly,
@@ -761,6 +764,15 @@ function run_ytdl_hook(url)
     if format ~= "ytdl" then
         table.insert(command, "--format")
         table.insert(command, format)
+    end
+    
+    if (sub_format == "") then
+        format = "ass/srt/best"
+    end
+
+    if sub_format ~= "ytdl" then
+        table.insert(command, "--sub-format")
+        table.insert(command, sub_format)
     end
 
     for param, arg in pairs(raw_options) do
